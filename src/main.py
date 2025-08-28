@@ -1,12 +1,12 @@
-import re
 import logging
+import re
 from urllib.parse import urljoin
 
 import requests_cache
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from configs import configure_arguments_parser, configure_logging
+from configs import configure_argument_parser, configure_logging
 from constants import BASE_DIR, EXPECTED_STATUS, MAIN_DOC_URL, PEP
 from outputs import control_output
 from utils import find_tag, get_response
@@ -20,8 +20,12 @@ def whats_new(session):
 
     soup = BeautifulSoup(response.text, 'lxml')
     main_div = find_tag(soup, 'section', attrs={'id': 'what-s-new-in-python'})
-    div_with_url = find_tag(main_div, 'div', attrs={'class': 'toctree-wrapper'})
-    section_by_python = div_with_url.find_all('li', attrs={'class': 'toctree-l1'})
+    div_with_url = find_tag(
+        main_div, 'div', attrs={'class': 'toctree-wrapper'}
+    )
+    section_by_python = div_with_url.find_all(
+        'li', attrs={'class': 'toctree-l1'}
+    )
 
     results = [('Ссылка на статью', 'Заголовок', 'Редактор, автор')]
     for section in tqdm(section_by_python):
@@ -41,7 +45,8 @@ def whats_new(session):
         )
     return results
 
-def latest_version(session):
+
+def latest_versions(session):
     response = get_response(session, MAIN_DOC_URL)
     if response is None:
         return
@@ -73,6 +78,7 @@ def latest_version(session):
         )
     return results
 
+
 def download(session):
     download_url = urljoin(MAIN_DOC_URL, 'download.html')
     response = get_response(session, download_url)
@@ -97,6 +103,7 @@ def download(session):
 
     logging.info(f'Архив был загружен и сохранён: {archive_path}')
 
+
 def pep(session):
     response = get_response(session, PEP)
     if response is None:
@@ -106,39 +113,39 @@ def pep(session):
     section = find_tag(soup, 'section', attrs={'id': 'index-by-category'})
     statuses = []
     dif_statuses = []
-    for table in section.find_all('table'):
+    for table in tqdm(section.find_all('table'), desc='Парсим данные...'):
         tbody = find_tag(table, 'tbody')
-        if tbody:
-            for row in tbody.find_all('tr'):
-                cells = row.find_all('td')
-                pep_status = cells[0].find('abbr').text if cells[0].find('abbr') else ''
-                pep_href = cells[1].find('a')['href']
-                pep_title = cells[2].text
-                pep_author = cells[3].text
+        for row in tbody.find_all('tr'):
+            cells = row.find_all('td')
+            pep_status = (find_tag(cells[0], 'abbr').text
+                          if find_tag(cells[0], 'abbr') else '')
+            pep_href = find_tag(cells[1], 'a')['href']
 
-                specific = urljoin(PEP, pep_href)
-                response = session.get(specific)
-                response.encoding = 'utf-8'
-                soup = BeautifulSoup(response.text, 'lxml')
-                section = find_tag(soup, 'section', attrs={'id': 'pep-content'})
-                dl = find_tag(section, 'dl')
-                pattern = r'Status'
-                for dt in dl.find_all('dt'):
-                    if re.search(pattern, dt.get_text()):
-                        status_dd = dt.find_next_sibling('dd').get_text()
+            specific = urljoin(PEP, pep_href)
+            response = session.get(specific)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'lxml')
+            section = find_tag(soup, 'section',
+                               attrs={'id': 'pep-content'})
+            dl = find_tag(section, 'dl')
+            pattern = r'Status'
+            for dt in dl.find_all('dt'):
+                if re.search(pattern, dt.get_text()):
+                    status_dd = dt.find_next_sibling('dd').get_text()
 
-                statuses.append(status_dd)
+            statuses.append(status_dd)
 
-                letter = pep_status[-1] if pep_status else ''
-                if letter in EXPECTED_STATUS.keys():
-                    if status_dd not in EXPECTED_STATUS[letter]:
-                        dif_statuses.append(
-                            f'{specific}\n'
-                            f'Статус в карточке: {status_dd}\n'
-                            f'Ожидаемые статусы: {EXPECTED_STATUS[letter]}'
-                        )
-                else:
-                    logging.error(f'Неизвестная аббревиатура: {letter}! (PEP: {specific})')
+            letter = pep_status[-1] if pep_status else ''
+            if letter in EXPECTED_STATUS.keys():
+                if status_dd not in EXPECTED_STATUS[letter]:
+                    dif_statuses.append(
+                        f'\n{specific}\n'
+                        f'Статус в карточке: {status_dd}\n'
+                        f'Ожидаемые статусы: {EXPECTED_STATUS[letter]}\n'
+                    )
+            else:
+                logging.error(f'Неизвестная аббревиатура: {letter}! '
+                              f'(PEP: {specific})')
 
     logging.info('Несовпадающие статусы:')
     for status in dif_statuses:
@@ -155,15 +162,16 @@ def pep(session):
 
 MODE_TO_FUNCTION = {
     'whats-new': whats_new,
-    'latest-versions': latest_version,
+    'latest-versions': latest_versions,
     'download': download,
     'pep': pep,
 }
 
+
 def main():
     configure_logging()
     logging.info('Парсер запущен!')
-    arg_parser = configure_arguments_parser(MODE_TO_FUNCTION.keys())
+    arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
     args = arg_parser.parse_args()
     logging.info(f'Аргументы командной строки: {args}')
 
@@ -178,6 +186,7 @@ def main():
         control_output(results, args)
 
     logging.info('Парсер завершил работу')
+
 
 if __name__ == '__main__':
     main()

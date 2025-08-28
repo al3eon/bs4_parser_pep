@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 from constants import BASE_DIR, DT_FORMAT, LOG_FORMAT
 
 
-def configure_arguments_parser(available_models):
+def configure_argument_parser(available_models):
     parser = argparse.ArgumentParser(description='Парсер документации Python')
     parser.add_argument(
         'mode',
@@ -16,15 +16,16 @@ def configure_arguments_parser(available_models):
         '-c',
         '--clear-cache',
         action='store_true',
-        help='Очиска кеша'
+        help='Очистка кеша'
     )
     parser.add_argument(
         '-o',
         '--output',
-        choices=['pretty', 'file'],
-        help='Дополнительный способ вывода данных'
+        choices=('pretty', 'file'),
+        help='Дополнительные способы вывода данных'
     )
     return parser
+
 
 def configure_logging():
     log_dir = BASE_DIR / 'logs'

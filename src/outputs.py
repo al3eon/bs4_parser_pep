@@ -16,6 +16,7 @@ def control_output(results, cli_args):
     else:
         default_output(results)
 
+
 def file_output(results, cli_args):
     results_dir = BASE_DIR / 'results'
     results_dir.mkdir(exist_ok=True)
@@ -31,9 +32,11 @@ def file_output(results, cli_args):
 
     logging.info(f'Файл с результатом был сохранен: {file_path}')
 
+
 def default_output(results):
     for row in results:
         print(*row)
+
 
 def pretty_output(results):
     table = PrettyTable()
