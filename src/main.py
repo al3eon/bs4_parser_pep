@@ -1,21 +1,27 @@
 import logging
 import re
+from collections import defaultdict
 from urllib.parse import urljoin
 
 import requests_cache
-from bs4 import BeautifulSoup
+from requests import RequestException
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
-from constants import BASE_DIR, EXPECTED_STATUS, MAIN_DOC_URL, PEP
+from constants import (BASE_DIR, EMPTY_RESULT, EXPECTED_STATUS,
+                       MAIN_DOC_URL, PEP, PEP_LOGGING)
+from exceptions import ParserFindTagException
 from outputs import control_output
-from utils import find_tag, get_response, get_soup
+from utils import find_tag, get_soup
 
 
 def whats_new(session):
     whats_new_url = urljoin(MAIN_DOC_URL, 'whatsnew/')
     soup = get_soup(session, whats_new_url)
-    section_by_python = soup.select('#what-s-new-in-python div.toctree-wrapper li.toctree-l1')
+    section_by_python = soup.select(
+        '#what-s-new-in-python div.toctree-wrapper li.toctree-l1')
+    if section_by_python is None:
+        raise ParserFindTagException('Не найден тег для ')
 
     results = [('Ссылка на статью', 'Заголовок', 'Редактор, автор')]
     for section in tqdm(section_by_python):
@@ -41,12 +47,11 @@ def latest_versions(session):
             a_tags = ul.find_all('a')
             break
     else:
-        raise Exception('Ничего не нашлось')
+        raise ParserFindTagException('Не найден список версий на странице')
 
     results = []
     pattern = r'Python (?P<version>\d\.\d+) \((?P<status>.*)\)'
     for a_tag in a_tags:
-        link = a_tag['href']
         text_match = re.search(pattern, a_tag.text)
 
         if text_match is not None:
@@ -55,7 +60,7 @@ def latest_versions(session):
             version, status = a_tag.text, ''
 
         results.append(
-            (link, version, status)
+            (a_tag['href'], version, status)
         )
     return results
 
@@ -64,10 +69,11 @@ def download(session):
     download_url = urljoin(MAIN_DOC_URL, 'download.html')
     soup = get_soup(session, download_url)
 
-    table = find_tag(soup, 'table', {'class': 'docutils'})
-    pdf_a4_tag = find_tag(table, 'a', {'href': re.compile(r'.+pdf-a4\.zip')})
-    pdf_a4_link = pdf_a4_tag['href']
-    archive_url = urljoin(download_url, pdf_a4_link)
+    archive_tag = soup.select_one(
+        'table.docutils a[href$="pdf-a4.zip"]')['href']
+    if archive_tag is None:
+        raise ParserFindTagException('Не найден тег для PDF A4 на странице')
+    archive_url = urljoin(download_url, archive_tag)
 
     filename = archive_url.split('/')[-1]
     downloads_dir = BASE_DIR / 'downloads'
@@ -78,59 +84,119 @@ def download(session):
     with archive_path.open('wb') as f:
         f.write(response.content)
 
-    logging.info(f'Архив был загружен и сохранён: {archive_path}')
+    logging.info(logging.info(PEP_LOGGING['ARCHIVE_PATH'].format(
+        archive_path))
+    )
 
 
-def pep(session):
-    soup = get_soup(session, PEP)
-    section = find_tag(soup, 'section', attrs={'id': 'index-by-category'})
-    statuses = []
-    dif_statuses = []
-    for table in tqdm(section.find_all('table'), desc='Парсим данные...'):
-        tbody = find_tag(table, 'tbody')
-        for row in tbody.find_all('tr'):
-            cells = row.find_all('td')
-            pep_status = (find_tag(cells[0], 'abbr').text
-                          if find_tag(cells[0], 'abbr') else '')
-            pep_href = find_tag(cells[1], 'a')['href']
+def _log_pep_errors(request_errors, tag_errors, unknown_abbr, dif_statuses):
+    if request_errors:
+        logging.error(PEP_LOGGING['REQUEST_ERRORS_HEADER'])
+        for error in request_errors:
+            logging.error(error, exc_info=True)
 
-            specific = urljoin(PEP, pep_href)
-            response = session.get(specific)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'lxml')
-            section = find_tag(soup, 'section',
-                               attrs={'id': 'pep-content'})
-            dl = find_tag(section, 'dl')
-            pattern = r'Status'
-            for dt in dl.find_all('dt'):
-                if re.search(pattern, dt.get_text()):
-                    status_dd = dt.find_next_sibling('dd').get_text()
+    if tag_errors:
+        logging.error(PEP_LOGGING['TAG_ERRORS_HEADER'])
+        for error in tag_errors:
+            logging.error(error, exc_info=True)
 
-            statuses.append(status_dd)
+    logging.info(PEP_LOGGING['UNKNOWN_ABBR_HEADER'])
+    for abbr in unknown_abbr:
+        logging.info(abbr)
 
-            letter = pep_status[-1] if pep_status else ''
-            if letter in EXPECTED_STATUS.keys():
-                if status_dd not in EXPECTED_STATUS[letter]:
-                    dif_statuses.append(
-                        f'\n{specific}\n'
-                        f'Статус в карточке: {status_dd}\n'
-                        f'Ожидаемые статусы: {EXPECTED_STATUS[letter]}\n'
-                    )
-            else:
-                logging.error(f'Неизвестная аббревиатура: {letter}! '
-                              f'(PEP: {specific})')
-
-    logging.info('Несовпадающие статусы:')
+    logging.info(PEP_LOGGING['DIF_STATUSES_HEADER'])
     for status in dif_statuses:
         logging.info(status)
 
-    csv_data = [('Статус', 'Количество')]
-    unique_statuses = set(statuses)
-    for status in sorted(unique_statuses):
-        csv_data.append((status, statuses.count(status)))
-    csv_data.append(('Total', len(statuses)))
 
-    return csv_data
+def _process_pep_row(
+        row, session, status_counts, dif_statuses,
+        unknown_abbr, request_errors, tag_errors):
+    try:
+        cells = row.find_all('td')
+        pep_status = (find_tag(cells[0], 'abbr').text
+                      if find_tag(cells[0], 'abbr') else '')
+        pep_href = find_tag(cells[1], 'a')['href']
+
+        specific = urljoin(PEP, pep_href)
+        soup = get_soup(session, specific)
+        if soup is None:
+            request_errors.append(PEP_LOGGING['EMPTY_RESPONSE'].format(
+                specific)
+            )
+            return
+
+        section = find_tag(soup, 'section',
+                           attrs={'id': 'pep-content'})
+        dl = find_tag(section, 'dl')
+        pattern = r'Status'
+        for dt in dl.find_all('dt'):
+            if re.search(pattern, dt.get_text()):
+                status_dd = dt.find_next_sibling('dd').get_text()
+
+        status_counts[status_dd] += 1
+
+        letter = pep_status[-1] if pep_status else ''
+        if letter in EXPECTED_STATUS.keys():
+            if status_dd not in EXPECTED_STATUS[letter]:
+                dif_statuses.append(
+                    PEP_LOGGING['DIF_STATUSES'].format(
+                        specific, status_dd, EXPECTED_STATUS[letter]
+                    )
+                )
+        else:
+            unknown_abbr.append(
+                PEP_LOGGING['UNKNOWN_ABBR'].format(
+                    f'{letter} (PEP: {specific})'
+                )
+            )
+
+    except RequestException as e:
+        request_errors.append(PEP_LOGGING['REQUEST_ERROR'].format(
+            specific, str(e))
+        )
+    except ParserFindTagException as e:
+        tag_errors.append(PEP_LOGGING['TAG_ERROR'].format(
+            specific, str(e))
+        )
+
+# Правильно ли понял замечание насчет логирования?
+# Разбил на несколько функций из-за жалоб линтера - с901
+def pep(session):
+    request_errors = []
+    tag_errors = []
+
+    try:
+        soup = get_soup(session, PEP)
+        if soup is None:
+            logging.error(PEP_LOGGING['EMPTY_RESPONSE'].format(PEP))
+            return EMPTY_RESULT
+
+        section = find_tag(soup, 'section', attrs={'id': 'numerical-index'})
+        tbody = find_tag(section, 'tbody')
+    except ParserFindTagException as e:
+        logging.error(PEP_LOGGING['MAIN_PAGE_ERROR'].format(
+            PEP, str(e)), exc_info=True
+        )
+        return EMPTY_RESULT
+
+    status_counts = defaultdict(int)
+    dif_statuses = []
+    unknown_abbr = []
+
+    for row in tqdm(tbody.find_all('tr'), desc='Парсим данные...'):
+        _process_pep_row(
+            row, session, status_counts, dif_statuses,
+            unknown_abbr, request_errors, tag_errors
+        )
+
+    _log_pep_errors(request_errors, tag_errors, unknown_abbr, dif_statuses)
+
+    return [
+        ('Статус', 'Количество'),
+        *sorted(status_counts.items()),
+        ('Всего', sum(status_counts.values()))
+    ]
 
 
 MODE_TO_FUNCTION = {
@@ -143,22 +209,28 @@ MODE_TO_FUNCTION = {
 
 def main():
     configure_logging()
-    logging.info('Парсер запущен!')
-    arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
-    args = arg_parser.parse_args()
-    logging.info(f'Аргументы командной строки: {args}')
+    logging.info(PEP_LOGGING['PARSER_START'])
 
-    session = requests_cache.CachedSession()
-    if args.clear_cache:
-        session.cache.clear()
+    try:
+        arg_parser = configure_argument_parser(MODE_TO_FUNCTION.keys())
+        args = arg_parser.parse_args()
+        logging.info(PEP_LOGGING['PARSER_ARGS'].format(args))
 
-    parser_mode = args.mode
-    results = MODE_TO_FUNCTION[parser_mode](session)
+        session = requests_cache.CachedSession()
+        if args.clear_cache:
+            session.cache.clear()
 
-    if results is not None:
-        control_output(results, args)
+        parser_mode = args.mode
+        results = MODE_TO_FUNCTION[parser_mode](session)
 
-    logging.info('Парсер завершил работу')
+        if results is not None:
+            control_output(results, args)
+
+    except Exception as e:
+        logging.error(PEP_LOGGING['PARSER_ERROR'].format(str(e)),
+                      exc_info=True)
+
+    logging.info(PEP_LOGGING['PARSER_FINISH'])
 
 
 if __name__ == '__main__':
