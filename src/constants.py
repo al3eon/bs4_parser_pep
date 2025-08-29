@@ -17,3 +17,7 @@ EXPECTED_STATUS = {
     'W': ('Withdrawn',),
     '': ('Draft', 'Active'),
 }
+LOG_DIR = BASE_DIR / 'logs'
+LOG_FILE = LOG_DIR / 'parser.log'
+PRETTY_OUTPUT = 'pretty'
+FILE_OUTPUT = 'file'
