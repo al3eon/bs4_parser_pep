@@ -84,8 +84,8 @@ def download(session):
     with archive_path.open('wb') as f:
         f.write(response.content)
 
-    logging.info(logging.info(PEP_LOGGING['ARCHIVE_PATH'].format(
-        archive_path))
+    logging.info(PEP_LOGGING['ARCHIVE_PATH'].format(
+        archive_path)
     )
 
 
