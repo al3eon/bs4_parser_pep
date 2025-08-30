@@ -1,7 +1,5 @@
 from pathlib import Path
 
-# Правильно ли понял про группы?
-# Или нужно было так же, как в PEP_LOGGING?
 PEP = 'https://peps.python.org/numerical/'
 MAIN_DOC_URL = 'https://docs.python.org/3/'
 
@@ -35,13 +33,14 @@ FILE_OUTPUT = 'file'
 PEP_LOGGING = {
     'EMPTY_RESPONSE': 'Пустой ответ от страницы: {}',
     'MAIN_PAGE_ERROR': 'Ошибка парсинга главной страницы {}: {}',
-    'REQUEST_ERRORS_HEADER': 'Ошибки при загрузке страниц:',
+    'ERRORS_HEADER': 'Ошибки при парсинге страниц: ',
+    'REQUEST_ERRORS_HEADER': 'Ошибки при загрузке страниц: ',
     'REQUEST_ERROR': 'Ошибка загрузки {}: {}',
-    'TAG_ERRORS_HEADER': 'Ошибки при поиске тегов:',
+    'TAG_ERRORS_HEADER': 'Ошибки при поиске тегов: ',
     'TAG_ERROR': 'Ошибка парсинга {}: {}',
-    'UNKNOWN_ABBR_HEADER': 'Неизвестная аббревиатура:',
+    'UNKNOWN_ABBR_HEADER': 'Неизвестная аббревиатура: ',
     'UNKNOWN_ABBR': '{}',
-    'DIF_STATUSES_HEADER': 'Несовпадающие статусы:',
+    'DIF_STATUSES_HEADER': 'Несовпадающие статусы: ',
     'DIF_STATUSES': '\n{}\nСтатус в карточке: {}\nОжидаемые статусы: {}\n',
     'FILE_SAVE': 'Файл с результатом был сохранен: {}',
     'ARCHIVE_PATH': 'Архив был загружен и сохранён: {}',

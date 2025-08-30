@@ -8,7 +8,7 @@ from requests import RequestException
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
-from constants import (BASE_DIR, EMPTY_RESULT, EXPECTED_STATUS,
+from constants import (BASE_DIR, EXPECTED_STATUS,
                        MAIN_DOC_URL, PEP, PEP_LOGGING)
 from exceptions import ParserFindTagException
 from outputs import control_output
@@ -16,6 +16,8 @@ from utils import find_tag, get_soup
 
 
 def whats_new(session):
+    errors = []
+
     whats_new_url = urljoin(MAIN_DOC_URL, 'whatsnew/')
     soup = get_soup(session, whats_new_url)
     section_by_python = soup.select(
@@ -25,15 +27,30 @@ def whats_new(session):
 
     results = [('Ссылка на статью', 'Заголовок', 'Редактор, автор')]
     for section in tqdm(section_by_python):
-        version_a_tag = section.find('a')
-        href = version_a_tag['href']
-        version_link = urljoin(whats_new_url, href)
-        soup = get_soup(session, version_link)
-        results.append((
-            version_link,
-            find_tag(soup, 'h1'),
-            find_tag(soup, 'dl').text.replace('\n', ' ')
-        ))
+        try:
+
+            version_a_tag = section.find('a')
+            href = version_a_tag['href']
+            version_link = urljoin(whats_new_url, href)
+            soup = get_soup(session, version_link)
+            results.append((
+                version_link,
+                find_tag(soup, 'h1'),
+                find_tag(soup, 'dl').text.replace('\n', ' ')
+            ))
+
+        except RequestException as e:
+            errors.append(PEP_LOGGING['REQUEST_ERROR'].format(
+                version_link, str(e)))
+        except ParserFindTagException as e:
+            errors.append(PEP_LOGGING['TAG_ERROR'].format(
+                version_link, str(e)))
+
+    if errors:
+        logging.error(PEP_LOGGING['ERRORS_HEADER'])
+        for error in errors:
+            logging.error(error, exc_info=True)
+
     return results
 
 
@@ -89,15 +106,10 @@ def download(session):
     )
 
 
-def _log_pep_errors(request_errors, tag_errors, unknown_abbr, dif_statuses):
-    if request_errors:
-        logging.error(PEP_LOGGING['REQUEST_ERRORS_HEADER'])
-        for error in request_errors:
-            logging.error(error, exc_info=True)
-
-    if tag_errors:
-        logging.error(PEP_LOGGING['TAG_ERRORS_HEADER'])
-        for error in tag_errors:
+def _log_pep_errors(errors, unknown_abbr, dif_statuses):
+    if errors:
+        logging.error(PEP_LOGGING['ERRORS_HEADER'])
+        for error in errors:
             logging.error(error, exc_info=True)
 
     logging.info(PEP_LOGGING['UNKNOWN_ABBR_HEADER'])
@@ -110,8 +122,7 @@ def _log_pep_errors(request_errors, tag_errors, unknown_abbr, dif_statuses):
 
 
 def _process_pep_row(
-        row, session, status_counts, dif_statuses,
-        unknown_abbr, request_errors, tag_errors):
+        row, session, status_counts, dif_statuses, unknown_abbr, errors):
     try:
         cells = row.find_all('td')
         pep_status = (find_tag(cells[0], 'abbr').text
@@ -121,7 +132,7 @@ def _process_pep_row(
         specific = urljoin(PEP, pep_href)
         soup = get_soup(session, specific)
         if soup is None:
-            request_errors.append(PEP_LOGGING['EMPTY_RESPONSE'].format(
+            errors.append(PEP_LOGGING['EMPTY_RESPONSE'].format(
                 specific)
             )
             return
@@ -152,34 +163,21 @@ def _process_pep_row(
             )
 
     except RequestException as e:
-        request_errors.append(PEP_LOGGING['REQUEST_ERROR'].format(
+        errors.append(PEP_LOGGING['REQUEST_ERROR'].format(
             specific, str(e))
         )
     except ParserFindTagException as e:
-        tag_errors.append(PEP_LOGGING['TAG_ERROR'].format(
+        errors.append(PEP_LOGGING['TAG_ERROR'].format(
             specific, str(e))
         )
 
 
-# Правильно ли понял замечание насчет логирования?
-# Разбил на несколько функций из-за жалоб линтера - с901
 def pep(session):
-    request_errors = []
-    tag_errors = []
+    errors = []
 
-    try:
-        soup = get_soup(session, PEP)
-        if soup is None:
-            logging.error(PEP_LOGGING['EMPTY_RESPONSE'].format(PEP))
-            return EMPTY_RESULT
-
-        section = find_tag(soup, 'section', attrs={'id': 'numerical-index'})
-        tbody = find_tag(section, 'tbody')
-    except ParserFindTagException as e:
-        logging.error(PEP_LOGGING['MAIN_PAGE_ERROR'].format(
-            PEP, str(e)), exc_info=True
-        )
-        return EMPTY_RESULT
+    soup = get_soup(session, PEP)
+    section = find_tag(soup, 'section', attrs={'id': 'numerical-index'})
+    tbody = find_tag(section, 'tbody')
 
     status_counts = defaultdict(int)
     dif_statuses = []
@@ -188,10 +186,10 @@ def pep(session):
     for row in tqdm(tbody.find_all('tr'), desc='Парсим данные...'):
         _process_pep_row(
             row, session, status_counts, dif_statuses,
-            unknown_abbr, request_errors, tag_errors
+            unknown_abbr, errors
         )
 
-    _log_pep_errors(request_errors, tag_errors, unknown_abbr, dif_statuses)
+    _log_pep_errors(errors, unknown_abbr, dif_statuses)
 
     return [
         ('Статус', 'Количество'),
