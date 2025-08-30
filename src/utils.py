@@ -5,12 +5,9 @@ from exceptions import ParserFindTagException
 
 
 def get_response(session, url):
-    try:
-        response = session.get(url)
-        response.encoding = 'utf-8'
-        return response
-    except RequestException:
-        raise
+    response = session.get(url)
+    response.encoding = 'utf-8'
+    return response
 
 
 def find_tag(soup, tag, attrs=None):
